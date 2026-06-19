@@ -13,9 +13,18 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 # Setup
 # ============================================================
 print("Loading models...")
-nlp      = spacy.load("en_core_web_md")
 sia      = SentimentIntensityAnalyzer()
-topic_model = joblib.load("results/topic_classifier.pkl")
+try:
+    nlp = spacy.load("en_core_web_md")
+except OSError:
+    print("Downloading 'en_core_web_md' model for spaCy...")
+    from spacy.cli import download
+    download("en_core_web_md")
+try:
+    topic_model = joblib.load("results/topic_classifier.pkl")
+except FileNotFoundError:
+    print("ERROR: Topic model not found. Please run 'python3 results/training_model.py' first.")
+    exit(1)
 print("All models loaded!\n")
 
 # ============================================================
@@ -125,7 +134,7 @@ def main():
         print("\n---------- Detect entities ----------")
         orgs = detect_entities(headline + " " + body)
         if orgs:
-            print(f"Detected {len(orgs)} companies: {', '.join(orgs[:5])}")
+            print(f"Detected {len(orgs)} companies which are {', '.join(orgs[:5])}")
         else:
             print("No organizations detected")
 

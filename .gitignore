@@ -60,14 +60,6 @@ venv.bak/
 *.log
 *.sqlite3
 
-# Results, models and training outputs
-results/
-models/
-*.h5
-*.ckpt
 
-# Others
-*.pyc
-*.pyo
-*.pyd
-*~
+
+

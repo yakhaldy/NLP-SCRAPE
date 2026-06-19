@@ -39,11 +39,6 @@ python scripts/nlp_enriched_news.py
 python results/training_model.py
 ```
 
-4. Run quick tests:
-
-```bash
-python test.py
-```
 
 ## Project notes
 

@@ -28,6 +28,10 @@ SECTIONS = [
     "/news/world/africa",
     "/news/world/latin_america",
     "/sport",
+    "/news/education",
+    "/news/politics",
+    "/sport/football",
+    "/sport/rugby-union",
 ]
 
 HEADERS = {
@@ -141,7 +145,7 @@ def main():
     # Remove duplicates
     all_links = list(set(all_links))
     print(f"\nTotal unique links: {len(all_links)}")
-
+    
     # --- Step 2: Scrape each article ---
     print("\n" + "=" * 60)
     print("Scraping articles...")
@@ -169,7 +173,8 @@ def main():
         if len(all_articles) >= 350:
             print("\nTarget reached: 350 articles!")
             break
-
+        
+    print("total articles:", len(all_articles))
     # --- Step 3: Save to CSV ---
     print("\n" + "=" * 60)
     print("Saving results...")
