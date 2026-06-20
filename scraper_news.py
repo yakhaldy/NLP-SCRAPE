@@ -13,25 +13,24 @@ import os
 # --- Settings ---
 BASE_URL = "https://www.bbc.com"
 
-# More sections = more articles
 SECTIONS = [
-    "/news/technology",
     "/news/science_and_environment",
+    "/news/topics/cx1m7zg0gylt",   
+    "/news/topics/cmj34zmwm1zt",   
     "/news/business",
+    "/news/business/companies",
+    "/news/business/economy",
+    "/innovation/technology",
     "/news/world",
     "/news/health",
-    "/news/entertainment_and_arts",
-    "/news/uk",
-    "/news/us-and-canada",
+    "/news/world/africa",
     "/news/world/asia",
     "/news/world/europe",
-    "/news/world/africa",
     "/news/world/latin_america",
+    "/news/uk",
+    "/news/us-canada",
+    "/news",
     "/sport",
-    "/news/education",
-    "/news/politics",
-    "/sport/football",
-    "/sport/rugby-union",
 ]
 
 HEADERS = {
@@ -61,14 +60,15 @@ def get_article_links(section_url):
 
         for anchor in all_anchors:
             href = anchor["href"]
-            if href.startswith("/news/") and href.count("/") >= 3:
-                full_url = BASE_URL + href
-                if full_url not in links:
-                    links.append(full_url)
 
-            # Also catch /sport/ articles
-            if href.startswith("/sport/") and href.count("/") >= 3:
-                full_url = BASE_URL + href
+            # Modern BBC article URLs: /news/articles/<id>, /sport/<x>/articles/<id>
+            is_modern = "/articles/" in href
+            # Legacy fallback: /news/<topic>/<id> style still seen on some pages
+            is_legacy = (href.startswith("/news/") or href.startswith("/sport/")) \
+                        and href.count("/") >= 3
+
+            if is_modern or is_legacy:
+                full_url = href if href.startswith("http") else BASE_URL + href
                 if full_url not in links:
                     links.append(full_url)
 
@@ -107,7 +107,7 @@ def scrape_article(url):
         if len(body) < 100:
             return None
 
-        date_today = datetime.now().strftime("%Y-%m-%d")
+        date_today = extract_published_date(soup) or datetime.now().strftime("%Y-%m-%d")
         article_id = str(uuid.uuid4())
 
         return {
@@ -122,6 +122,23 @@ def scrape_article(url):
         print(f"  ERROR parsing {url}: {e}")
         return None
 
+
+
+def extract_published_date(soup):
+    # <time datetime="2026-06-14T...">
+    t = soup.find("time", attrs={"datetime": True})
+    if t and t["datetime"][:4].isdigit():
+        return t["datetime"][:10]
+    # <meta property="article:published_time" content="...">
+    for attrs in ({"property": "article:published_time"},
+                  {"name": "article:published_time"},
+                  {"property": "og:article:published_time"}):
+        m = soup.find("meta", attrs=attrs)
+        if m and m.get("content", "")[:4].isdigit():
+            return m["content"][:10]
+    return None
+ 
+ 
 
 # ============================================================
 # Function 3: Main — coordinates everything

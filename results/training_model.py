@@ -42,7 +42,7 @@ print("=" * 55)
 
 pipeline = Pipeline([
     ("tfidf", TfidfVectorizer(
-        max_features=10000,    # more features = more information
+        max_features=10000,    
         stop_words="english",
         ngram_range=(1, 2),
         sublinear_tf=True,     # apply log normalization to TF
@@ -82,8 +82,7 @@ y_pred = pipeline.predict(X_test)
 score  = accuracy_score(y_test, y_pred)
 
 print(f"\nTest accuracy: {score:.2%}")
-print("\nDetailed report:")
-print(classification_report(y_test, y_pred))
+
 
 if score >= 0.95:
     print("Target achieved: score > 95%")
@@ -104,7 +103,7 @@ train_sizes, train_scores, val_scores = learning_curve(
     X_train, y_train,
     cv=cv,
     train_sizes=np.linspace(0.1, 1.0, 8),
-    scoring="accuracy",
+    scoring="accuracy", 
     n_jobs=-1,
 )
 

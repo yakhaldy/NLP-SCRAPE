@@ -13,13 +13,15 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 # Setup
 # ============================================================
 print("Loading models...")
-sia      = SentimentIntensityAnalyzer()
+sia = SentimentIntensityAnalyzer()
 try:
     nlp = spacy.load("en_core_web_md")
 except OSError:
     print("Downloading 'en_core_web_md' model for spaCy...")
     from spacy.cli import download
     download("en_core_web_md")
+    nlp = spacy.load("en_core_web_md")
+
 try:
     topic_model = joblib.load("results/topic_classifier.pkl")
 except FileNotFoundError:
@@ -31,22 +33,38 @@ print("All models loaded!\n")
 # Scandal Detection Keywords
 # ============================================================
 SCANDAL_KEYWORDS = [
-    "pollution", "contamination", "deforestation",
-    "oil spill", "toxic waste", "environmental disaster",
-    "emissions", "ecological damage", "habitat destruction",
-    "chemical leak", "nuclear waste", "water contamination",
-    "air pollution", "soil contamination", "illegal dumping",
+    "pollution", "contamination", "contaminate", "pollute",
+    "deforestation", "oil spill", "oil leak", "toxic waste",
+    "hazardous waste", "environmental disaster", "ecological damage",
+    "habitat destruction", "chemical leak", "chemical spill",
+    "nuclear waste", "water contamination", "air pollution",
+    "soil contamination", "illegal dumping", "toxic spill",
+    "sewage discharge", "wastewater discharge", "effluent", "smog",
 ]
 
-SCANDAL_THRESHOLD = 0.55   # raised to reduce false positives
+SINGLE_KEYWORDS = {k for k in SCANDAL_KEYWORDS if " " not in k}
+PHRASE_KEYWORDS = {k for k in SCANDAL_KEYWORDS if " " in k}
 
-# Precompute keyword vector (average of all keywords)
-keyword_vectors  = [nlp(kw).vector for kw in SCANDAL_KEYWORDS]
-KEYWORD_VECTOR   = np.mean(keyword_vectors, axis=0)
+
+KEYWORD_VECTORS = [nlp(kw).vector for kw in SCANDAL_KEYWORDS]
+
+
+ORG_BLOCK_PREFIXES = (
+    "bbc", "reuters", "afp", "cnn", "sky news", "the guardian",
+    "itv", "pa media", "getty", "associated press",
+)
+
+
+def _is_blocked_org(name):
+    low = name.lower().strip()
+    return any(low == p or low.startswith(p + " ") for p in ORG_BLOCK_PREFIXES)
+
+
+SCANDAL_THRESHOLD = 0.50
 
 
 # ============================================================
-# Helper: cosine similarity
+# Helpers
 # ============================================================
 def cosine_similarity(vec1, vec2):
     norm = np.linalg.norm(vec1) * np.linalg.norm(vec2)
@@ -55,13 +73,33 @@ def cosine_similarity(vec1, vec2):
     return float(np.dot(vec1, vec2) / norm)
 
 
+def content_vector(span):
+    """Average vector over content words only (drop stopwords/punct).
+    This removes the function-word noise that flattened similarities."""
+    vecs = [t.vector for t in span
+            if t.has_vector and not t.is_stop and not t.is_punct and t.is_alpha]
+    if not vecs:
+        return None
+    return np.mean(vecs, axis=0)
+
+
 # ============================================================
-# Step 1: Detect ORG entities
+# Step 1: Detect ORG entities (de-duplicated, noise-filtered)
 # ============================================================
 def detect_entities(text):
-    doc  = nlp(text)
-    orgs = list({ent.text for ent in doc.ents if ent.label_ == "ORG"})
-    return orgs
+    doc = nlp(text)
+    orgs = {}
+    for ent in doc.ents:
+        if ent.label_ != "ORG":
+            continue
+        name = ent.text.strip()
+        if len(name) < 2:
+            continue
+        if _is_blocked_org(name):
+            continue
+        key = name.lower()
+        orgs.setdefault(key, name)  
+    return list(orgs.values())
 
 
 # ============================================================
@@ -69,57 +107,54 @@ def detect_entities(text):
 # ============================================================
 def detect_topic(headline, body):
     combined = headline + " " + body[:500]
-    topic    = topic_model.predict([combined])[0]
-    return topic
+    return topic_model.predict([combined])[0]
 
 
 # ============================================================
 # Step 3: Sentiment analysis
 # ============================================================
 def detect_sentiment(text):
-    scores   = sia.polarity_scores(text[:1000])
+    scores = sia.polarity_scores(text[:1000])
     return round(scores["compound"], 4)
 
 
 # ============================================================
-# Step 4: Scandal detection
+# Step 4: Scandal detection (lexical gate + semantic ranking)
 # ============================================================
-def detect_scandal(body, orgs):
+def detect_scandal(body_doc, orgs):
+    orgs = [o for o in orgs if not _is_blocked_org(o)]
     if not orgs:
         return 0.0
+    orgs_lower = [o.lower() for o in orgs]
 
-    doc       = nlp(body)
-    sentences = [sent.text for sent in doc.sents]
+    best = 0.0
+    for sent in body_doc.sents:
+        low = sent.text.lower()
+        if not any(o in low for o in orgs_lower):
+            continue
 
-    # Keep only sentences that contain at least one ORG
-    org_sentences = []
-    for sent in sentences:
-        sent_lower = sent.lower()
-        if any(org.lower() in sent_lower for org in orgs):
-            org_sentences.append(sent)
+        lemmas = {t.lemma_.lower() for t in sent}
+        lexical_hit = (any(k in lemmas for k in SINGLE_KEYWORDS)
+                       or any(p in low for p in PHRASE_KEYWORDS))
+        if not lexical_hit:
+            continue
 
-    if not org_sentences:
-        return 0.0
+        sv = content_vector(sent)
+        if sv is None:
+            continue
 
-    # Compute similarity for each ORG sentence
-    scores = []
-    for sent in org_sentences:
-        sent_vec = nlp(sent).vector
-        score    = cosine_similarity(sent_vec, KEYWORD_VECTOR)
-        scores.append(score)
+        sim = max(cosine_similarity(sv, kv) for kv in KEYWORD_VECTORS)
+        best = max(best, sim)
 
-    # Return max score as the scandal distance for this article
-    return round(float(np.max(scores)), 4)
+    return round(float(best), 4)
 
 
 # ============================================================
 # Main pipeline
 # ============================================================
 def main():
-    # Load articles
     df = pd.read_csv("data/articles.csv")
     total = len(df)
-
     results = []
 
     for i, row in df.iterrows():
@@ -132,7 +167,7 @@ def main():
 
         # ---------- Detect entities ----------
         print("\n---------- Detect entities ----------")
-        orgs = detect_entities(headline + " " + body)
+        orgs = detect_entities(headline + " " + body[:3000])
         if orgs:
             print(f"Detected {len(orgs)} companies which are {', '.join(orgs[:5])}")
         else:
@@ -158,7 +193,8 @@ def main():
         # ---------- Scandal detection ----------
         print("\n---------- Scandal detection ----------")
         print("Computing embeddings and distance ...")
-        scandal_score = detect_scandal(body, orgs)
+        body_doc      = nlp(body[:5000])
+        scandal_score = detect_scandal(body_doc, orgs)
 
         if scandal_score >= SCANDAL_THRESHOLD and orgs:
             print(f"Environmental scandal detected for: {', '.join(orgs[:3])}")
@@ -175,30 +211,29 @@ def main():
             "topic":            topic,
             "sentiment":        sentiment,
             "scandal_distance": scandal_score,
-            "top_10":           False,   # will update below
+            "top_10":           False,
         })
 
     # --------------------------------------------------------
-    # Flag top 10 scandal articles
+    # Flag the top 10 scandal articles.
     # --------------------------------------------------------
     results_df = pd.DataFrame(results)
-    top10_idx  = results_df["scandal_distance"].nlargest(10).index
-    results_df.loc[top10_idx, "top_10"] = True
+    candidates = results_df[results_df["scandal_distance"] >= SCANDAL_THRESHOLD]
+    top_idx = candidates["scandal_distance"].nlargest(10).index
+    results_df.loc[top_idx, "top_10"] = True
 
-    # --------------------------------------------------------
-    # Save
-    # --------------------------------------------------------
     os.makedirs("results", exist_ok=True)
     results_df.to_csv("results/enhanced_news.csv", index=False)
 
     print("\n" + "=" * 60)
     print(f"Done! Processed {len(results_df)} articles")
     print(f"Saved to: results/enhanced_news.csv")
-    print("\nTop 10 scandal articles:")
-    top10 = results_df[results_df["top_10"]].sort_values(
-        "scandal_distance", ascending=False
-    )
-    for _, r in top10.iterrows():
+    flagged = results_df[results_df["top_10"]].sort_values(
+        "scandal_distance", ascending=False)
+    print(f"\nFlagged {len(flagged)} scandal article(s):")
+    if flagged.empty:
+        print("  (none cleared the threshold in this dataset)")
+    for _, r in flagged.iterrows():
         print(f"  {r['scandal_distance']:.3f} | {r['headline'][:60]}")
     print("=" * 60)
 
